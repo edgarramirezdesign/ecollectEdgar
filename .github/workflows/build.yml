@@ -1,0 +1,60 @@
+name: Assign Build Number
+
+on:
+  push:
+    branches:
+      - dev
+      - fix
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-number
+  cancel-in-progress: false
+
+jobs:
+  build-number:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Get next build number
+        id: build
+        shell: bash
+        run: |
+          current=$(cat BUILD)
+          next=$((current + 1))
+
+          echo "$next" > BUILD
+
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+
+          echo "Current build: $current"
+          echo "Next build: $next"
+
+      - name: Update BUILD in main
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add BUILD
+
+          git commit -m "[BUILD] ${{ steps.build.outputs.next }}"
+
+          git push origin HEAD:main
+
+      - name: Create build tag
+        shell: bash
+        run: |
+          git fetch origin
+
+          git tag "${{ steps.build.outputs.next }}" "origin/${{ github.ref_name }}"
+          git push origin "${{ steps.build.outputs.next }}"
