@@ -18,75 +18,104 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check if push is a merge commit
+
+      # ------------------------------------------------------------
+      # 1. Obtener el commit que llegó a dev/fix
+      # ------------------------------------------------------------
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ------------------------------------------------------------
+      # 2. Verificar que el push corresponde a un merge commit
+      # ------------------------------------------------------------
+      - name: Check merge commit
         id: merge
         shell: bash
         run: |
-          parents=$(git ls-remote origin "${{ github.sha }}" 2>/dev/null | wc -l)
+          parent_count=$(git rev-list --parents -n 1 "$GITHUB_SHA" | awk '{print NF-1}')
 
-          git init temp-repo
-          cd temp-repo
-          git remote add origin "${{ github.server_url }}/${{ github.repository }}.git"
-          git fetch --no-tags origin "${{ github.sha }}"
-
-          parent_count=$(git rev-list --parents -n 1 "${{ github.sha }}" | awk '{print NF-1}')
+          echo "Commit: $GITHUB_SHA"
+          echo "Parent count: $parent_count"
 
           if [ "$parent_count" -ne 2 ]; then
-            echo "This commit is not a merge commit."
+            echo "El commit no es un merge."
             echo "should_build=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo "This commit is a merge commit."
+          echo "El commit es un merge."
           echo "should_build=true" >> "$GITHUB_OUTPUT"
 
-      - name: Stop if not a merge
-        if: steps.merge.outputs.should_build != 'true'
-        run: |
-          echo "No build number will be assigned."
-
-      - name: Checkout main
-        if: steps.merge.outputs.should_build == 'true'
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-
-      - name: Get next build number
+      # ------------------------------------------------------------
+      # 3. Obtener BUILD exclusivamente desde main
+      # ------------------------------------------------------------
+      - name: Read BUILD from main
         if: steps.merge.outputs.should_build == 'true'
         id: build
         shell: bash
         run: |
-          current=$(cat BUILD)
+          git fetch origin main
+
+          current=$(git show origin/main:BUILD)
+
+          if ! [[ "$current" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: main/BUILD no contiene un número válido."
+            exit 1
+          fi
+
           next=$((current + 1))
 
-          echo "$next" > BUILD
+          echo "BUILD actual : $current"
+          echo "BUILD nuevo  : $next"
 
           echo "current=$current" >> "$GITHUB_OUTPUT"
           echo "next=$next" >> "$GITHUB_OUTPUT"
 
-          echo "Current build: $current"
-          echo "Next build: $next"
-
+      # ------------------------------------------------------------
+      # 4. Actualizar BUILD exclusivamente en main
+      # ------------------------------------------------------------
       - name: Update BUILD in main
         if: steps.merge.outputs.should_build == 'true'
         shell: bash
         run: |
+          git fetch origin main
+          git checkout --detach origin/main
+
+          next="${{ steps.build.outputs.next }}"
+
+          echo "$next" > BUILD
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add BUILD
-
-          git commit -m "[BUILD] ${{ steps.build.outputs.next }}"
+          git commit -m "[BUILD] $next"
 
           git push origin HEAD:main
 
+      # ------------------------------------------------------------
+      # 5. Crear tag sobre EL MERGE de dev/fix
+      # ------------------------------------------------------------
       - name: Create build tag
         if: steps.merge.outputs.should_build == 'true'
         shell: bash
         run: |
-          git fetch origin
+          next="${{ steps.build.outputs.next }}"
 
-          git tag "${{ steps.build.outputs.next }}" "${{ github.sha }}"
+          git tag "$next" "$GITHUB_SHA"
 
-          git push origin "${{ steps.build.outputs.next }}"
+          git push origin "$next"
+
+      # ------------------------------------------------------------
+      # 6. Mostrar resultado
+      # ------------------------------------------------------------
+      - name: Build result
+        if: steps.merge.outputs.should_build == 'true'
+        run: |
+          echo "======================================"
+          echo "BUILD: ${{ steps.build.outputs.next }}"
+          echo "BRANCH: ${{ github.ref_name }}"
+          echo "MERGE: $GITHUB_SHA"
+          echo "======================================"
