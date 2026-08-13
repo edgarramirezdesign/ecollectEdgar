@@ -18,13 +18,42 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Check if push is a merge commit
+        id: merge
+        shell: bash
+        run: |
+          parents=$(git ls-remote origin "${{ github.sha }}" 2>/dev/null | wc -l)
+
+          git init temp-repo
+          cd temp-repo
+          git remote add origin "${{ github.server_url }}/${{ github.repository }}.git"
+          git fetch --no-tags origin "${{ github.sha }}"
+
+          parent_count=$(git rev-list --parents -n 1 "${{ github.sha }}" | awk '{print NF-1}')
+
+          if [ "$parent_count" -ne 2 ]; then
+            echo "This commit is not a merge commit."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "This commit is a merge commit."
+          echo "should_build=true" >> "$GITHUB_OUTPUT"
+
+      - name: Stop if not a merge
+        if: steps.merge.outputs.should_build != 'true'
+        run: |
+          echo "No build number will be assigned."
+
       - name: Checkout main
+        if: steps.merge.outputs.should_build == 'true'
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
 
       - name: Get next build number
+        if: steps.merge.outputs.should_build == 'true'
         id: build
         shell: bash
         run: |
@@ -40,6 +69,7 @@ jobs:
           echo "Next build: $next"
 
       - name: Update BUILD in main
+        if: steps.merge.outputs.should_build == 'true'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
@@ -52,9 +82,11 @@ jobs:
           git push origin HEAD:main
 
       - name: Create build tag
+        if: steps.merge.outputs.should_build == 'true'
         shell: bash
         run: |
           git fetch origin
 
-          git tag "${{ steps.build.outputs.next }}" "origin/${{ github.ref_name }}"
+          git tag "${{ steps.build.outputs.next }}" "${{ github.sha }}"
+
           git push origin "${{ steps.build.outputs.next }}"
