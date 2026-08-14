@@ -3,8 +3,8 @@ name: Assign Build Number
 on:
   push:
     branches:
+      - main
       - dev
-      - fix
 
 permissions:
   contents: write
@@ -15,44 +15,17 @@ concurrency:
 
 jobs:
   build-number:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
 
     steps:
 
-      # ------------------------------------------------------------
-      # 1. Obtener el commit que llegó a dev/fix
-      # ------------------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # ------------------------------------------------------------
-      # 2. Verificar que el push corresponde a un merge commit
-      # ------------------------------------------------------------
-      - name: Check merge commit
-        id: merge
-        shell: bash
-        run: |
-          parent_count=$(git rev-list --parents -n 1 "$GITHUB_SHA" | awk '{print NF-1}')
-
-          echo "Commit: $GITHUB_SHA"
-          echo "Parent count: $parent_count"
-
-          if [ "$parent_count" -ne 2 ]; then
-            echo "El commit no es un merge."
-            echo "should_build=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "El commit es un merge."
-          echo "should_build=true" >> "$GITHUB_OUTPUT"
-
-      # ------------------------------------------------------------
-      # 3. Obtener BUILD exclusivamente desde main
-      # ------------------------------------------------------------
-      - name: Read BUILD from main
-        if: steps.merge.outputs.should_build == 'true'
+      - name: Get next build number
         id: build
         shell: bash
         run: |
@@ -70,14 +43,9 @@ jobs:
           echo "BUILD actual : $current"
           echo "BUILD nuevo  : $next"
 
-          echo "current=$current" >> "$GITHUB_OUTPUT"
           echo "next=$next" >> "$GITHUB_OUTPUT"
 
-      # ------------------------------------------------------------
-      # 4. Actualizar BUILD exclusivamente en main
-      # ------------------------------------------------------------
       - name: Update BUILD in main
-        if: steps.merge.outputs.should_build == 'true'
         shell: bash
         run: |
           git fetch origin main
@@ -95,11 +63,7 @@ jobs:
 
           git push origin HEAD:main
 
-      # ------------------------------------------------------------
-      # 5. Crear tag sobre EL MERGE de dev/fix
-      # ------------------------------------------------------------
       - name: Create build tag
-        if: steps.merge.outputs.should_build == 'true'
         shell: bash
         run: |
           next="${{ steps.build.outputs.next }}"
@@ -108,14 +72,10 @@ jobs:
 
           git push origin "$next"
 
-      # ------------------------------------------------------------
-      # 6. Mostrar resultado
-      # ------------------------------------------------------------
       - name: Build result
-        if: steps.merge.outputs.should_build == 'true'
         run: |
           echo "======================================"
-          echo "BUILD: ${{ steps.build.outputs.next }}"
+          echo "BUILD : ${{ steps.build.outputs.next }}"
           echo "BRANCH: ${{ github.ref_name }}"
-          echo "MERGE: $GITHUB_SHA"
+          echo "COMMIT: $GITHUB_SHA"
           echo "======================================"
