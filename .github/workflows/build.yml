@@ -15,39 +15,72 @@ concurrency:
 
 jobs:
   build-number:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
 
     steps:
 
+      # ------------------------------------------------------------
+      # 1. Obtener el código de la rama que recibió el push
+      # ------------------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Get next build number
+      # ------------------------------------------------------------
+      # 2. Obtener la versión anterior desde main/BUILD
+      # ------------------------------------------------------------
+      - name: Calculate build number
         id: build
         shell: bash
         run: |
+          set -e
+
           git fetch origin main
 
-          current=$(git show origin/main:BUILD)
+          current=$(git show origin/main:BUILD 2>/dev/null || echo "")
 
-          if ! [[ "$current" =~ ^[0-9]+$ ]]; then
-            echo "ERROR: main/BUILD no contiene un número válido."
-            exit 1
+          # --------------------------------------------------------
+          # Fecha actual de Colombia (UTC-5)
+          # Formato: YY.M.D
+          # --------------------------------------------------------
+          current_date=$(TZ="America/Bogota" date '+%y.%-m.%-d')
+
+          echo "Fecha Colombia : $current_date"
+          echo "BUILD actual   : ${current:-<vacío>}"
+
+          # --------------------------------------------------------
+          # Determinar el siguiente número
+          # --------------------------------------------------------
+          if [[ "$current" =~ ^([0-9]{2})\.([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+
+            previous_date="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+            previous_number="${BASH_REMATCH[4]}"
+
+            if [ "$previous_date" = "$current_date" ]; then
+              next_number=$((previous_number + 1))
+            else
+              next_number=1
+            fi
+
+          else
+            next_number=1
           fi
 
-          next=$((current + 1))
+          next_build="${current_date}.${next_number}"
 
-          echo "BUILD actual : $current"
-          echo "BUILD nuevo  : $next"
+          echo "Nuevo BUILD    : $next_build"
 
-          echo "next=$next" >> "$GITHUB_OUTPUT"
+          echo "next=$next_build" >> "$GITHUB_OUTPUT"
 
+      # ------------------------------------------------------------
+      # 3. Actualizar BUILD exclusivamente en main
+      # ------------------------------------------------------------
       - name: Update BUILD in main
         shell: bash
         run: |
+          set -e
+
           git fetch origin main
           git checkout --detach origin/main
 
@@ -59,19 +92,42 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add BUILD
+
+          # Si por alguna razón BUILD ya contiene el valor,
+          # no crear un commit innecesario.
+          if git diff --cached --quiet; then
+            echo "BUILD no requiere actualización."
+            exit 0
+          fi
+
           git commit -m "[BUILD] $next"
 
           git push origin HEAD:main
 
+      # ------------------------------------------------------------
+      # 4. Crear tag sobre el commit que recibió el push
+      # ------------------------------------------------------------
       - name: Create build tag
         shell: bash
         run: |
+          set -e
+
           next="${{ steps.build.outputs.next }}"
+
+          git fetch origin --tags
+
+          if git rev-parse "$next" >/dev/null 2>&1; then
+            echo "ERROR: El tag $next ya existe."
+            exit 1
+          fi
 
           git tag "$next" "$GITHUB_SHA"
 
           git push origin "$next"
 
+      # ------------------------------------------------------------
+      # 5. Mostrar resultado
+      # ------------------------------------------------------------
       - name: Build result
         run: |
           echo "======================================"
